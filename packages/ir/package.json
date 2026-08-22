@@ -1,0 +1,42 @@
+{
+  "name": "@vibestudio/ir",
+  "version": "0.1.0",
+  "description": "Process IR v1: JSON Schema, TypeScript types, deterministic validator, and model-feedback formatter",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema": "./schema/process-ir.v1.schema.json"
+  },
+  "bin": {
+    "vibestudio-ir": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "examples"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "validate": "tsx src/cli.ts validate",
+    "gen-schema": "node scripts/gen-schema.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "license": "UNLICENSED"
+}

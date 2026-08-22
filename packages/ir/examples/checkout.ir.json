@@ -1,0 +1,370 @@
+{
+  "ir_version": "1.0",
+  "process": {
+    "id": "checkout",
+    "name": "Checkout",
+    "description": "A customer reviews their cart, the order is validated, payment is taken (with up to three attempts), and on success the order is confirmed, a receipt is sent and inventory is reserved.",
+    "goal": "Turn a shopping cart into a paid, confirmed order with a receipt and reserved stock.",
+    "domain": "e-commerce",
+    "provenance": { "status": "stated", "source": "prompt: 'I need a checkout flow with card payment and retries'" }
+  },
+  "lanes": [
+    { "id": "customer", "name": "Customer", "kind": "human", "description": "The shopper using the storefront." },
+    { "id": "order-service", "name": "Order Service", "kind": "system", "description": "Our backend that owns carts, orders and inventory reservations." },
+    { "id": "payment-provider", "name": "Payment Provider", "kind": "external", "description": "Third-party card processor (e.g. Stripe)." }
+  ],
+  "data_objects": [
+    {
+      "id": "cart",
+      "name": "Cart",
+      "description": "Items the customer intends to buy.",
+      "states": ["open", "locked"],
+      "schema": {
+        "type": "object",
+        "required": ["id", "customer_id", "items", "currency", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "customer_id": { "type": "string" },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "status": { "type": "string", "enum": ["open", "locked"] },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["sku", "quantity", "unit_price"],
+              "properties": {
+                "sku": { "type": "string" },
+                "quantity": { "type": "integer", "minimum": 1 },
+                "unit_price": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "order",
+      "name": "Order",
+      "description": "The order created from a validated cart. Tracks payment attempts and lifecycle status.",
+      "states": ["validated", "rejected", "paid", "confirmed", "payment-failed"],
+      "sensitivity": "pii",
+      "schema": {
+        "type": "object",
+        "required": ["id", "cart_id", "customer_id", "total", "currency", "status", "payment_attempts"],
+        "properties": {
+          "id": { "type": "string" },
+          "cart_id": { "type": "string" },
+          "customer_id": { "type": "string" },
+          "total": { "type": "number", "minimum": 0 },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "status": { "type": "string", "enum": ["validated", "rejected", "paid", "confirmed", "payment-failed"] },
+          "rejection_reason": { "type": "string" },
+          "payment_attempts": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    {
+      "id": "payment-intent",
+      "name": "Payment Intent",
+      "description": "Provider-side object representing an authorisation attempt.",
+      "sensitivity": "payment",
+      "schema": {
+        "type": "object",
+        "required": ["id", "order_id", "amount", "currency", "client_secret"],
+        "properties": {
+          "id": { "type": "string" },
+          "order_id": { "type": "string" },
+          "amount": { "type": "number", "minimum": 0 },
+          "currency": { "type": "string" },
+          "client_secret": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "payment-result",
+      "name": "Payment Result",
+      "description": "Outcome of one authorisation attempt.",
+      "sensitivity": "payment",
+      "schema": {
+        "type": "object",
+        "required": ["intent_id", "status"],
+        "properties": {
+          "intent_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["approved", "declined", "abandoned"] },
+          "decline_code": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "receipt",
+      "name": "Receipt",
+      "description": "Email receipt sent to the customer.",
+      "schema": {
+        "type": "object",
+        "required": ["order_id", "sent_to", "sent_at"],
+        "properties": {
+          "order_id": { "type": "string" },
+          "sent_to": { "type": "string", "format": "email" },
+          "sent_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    {
+      "id": "inventory-reservation",
+      "name": "Inventory Reservation",
+      "description": "Stock held for the order.",
+      "schema": {
+        "type": "object",
+        "required": ["order_id", "lines"],
+        "properties": {
+          "order_id": { "type": "string" },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["sku", "quantity"],
+              "properties": { "sku": { "type": "string" }, "quantity": { "type": "integer", "minimum": 1 } }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start-checkout",
+      "type": "startEvent",
+      "name": "Customer clicks Checkout",
+      "lane": "customer",
+      "trigger": { "kind": "message", "detail": "checkout.requested" },
+      "data": { "writes": ["cart"] },
+      "provenance": { "status": "stated" }
+    },
+    {
+      "id": "cart-review",
+      "type": "userTask",
+      "name": "Review cart",
+      "lane": "customer",
+      "description": "Customer confirms items and quantities before paying.",
+      "data": { "reads": ["cart"], "writes": ["cart"] },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "an open cart with at least one item", "when": "the customer confirms the cart", "then": "the cart status becomes 'locked' and no further quantity edits are accepted" },
+        { "id": "AC-2", "given": "an open cart", "when": "the customer changes a quantity to 0", "then": "the line is removed and totals are recalculated" }
+      ],
+      "provenance": { "status": "stated" }
+    },
+    {
+      "id": "checkout-validate",
+      "type": "serviceTask",
+      "name": "Validate checkout",
+      "lane": "order-service",
+      "description": "Checks the locked cart (non-empty, stock, prices) and creates an order in status validated or rejected.",
+      "data": { "reads": ["cart"], "writes": ["order"] },
+      "integration": { "system": "Order Service", "operation": "createOrderFromCart", "direction": "outbound" },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "a locked cart with no items", "when": "validation runs", "then": "an order is created with status 'rejected' and rejection_reason 'empty-cart'" },
+        { "id": "AC-2", "given": "a locked cart with an item whose stock is 0", "when": "validation runs", "then": "the order status is 'rejected' with rejection_reason 'out-of-stock' naming the sku" },
+        { "id": "AC-3", "given": "a locked cart with in-stock items", "when": "validation runs", "then": "an order is created with status 'validated', total = sum(quantity * unit_price) and payment_attempts = 0" }
+      ],
+      "provenance": { "status": "inferred", "source": "prompt mentions 'validate the cart before payment'" }
+    },
+    {
+      "id": "gw-valid",
+      "type": "exclusiveGateway",
+      "direction": "split",
+      "name": "Cart valid?",
+      "lane": "order-service"
+    },
+    {
+      "id": "end-checkout-rejected",
+      "type": "endEvent",
+      "name": "Checkout rejected",
+      "lane": "order-service",
+      "result": { "kind": "none" }
+    },
+    {
+      "id": "gw-retry-merge",
+      "type": "exclusiveGateway",
+      "direction": "join",
+      "name": "Payment attempt",
+      "lane": "payment-provider"
+    },
+    {
+      "id": "payment-init",
+      "type": "serviceTask",
+      "name": "Initiate payment",
+      "lane": "payment-provider",
+      "description": "Creates a payment intent for the order total and increments the order's payment_attempts.",
+      "data": { "reads": ["order"], "writes": ["order", "payment-intent"] },
+      "integration": { "system": "Stripe", "operation": "paymentIntents.create", "direction": "outbound", "protocol": "https" },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "a validated order", "when": "payment is initiated", "then": "a payment intent exists with amount = order.total and currency = order.currency" },
+        { "id": "AC-2", "given": "a validated order with payment_attempts = n", "when": "payment is initiated", "then": "order.payment_attempts = n + 1" }
+      ]
+    },
+    {
+      "id": "payment-provider-error",
+      "type": "boundaryEvent",
+      "name": "Provider unavailable",
+      "lane": "payment-provider",
+      "attached_to": "payment-init",
+      "trigger": { "kind": "error", "detail": "PROVIDER_UNAVAILABLE" },
+      "interrupting": true
+    },
+    {
+      "id": "end-payment-error",
+      "type": "endEvent",
+      "name": "Payment provider error",
+      "lane": "payment-provider",
+      "result": { "kind": "error", "detail": "PROVIDER_UNAVAILABLE" }
+    },
+    {
+      "id": "payment-authorize",
+      "type": "userTask",
+      "name": "Authorize payment",
+      "lane": "customer",
+      "description": "Customer completes the card form / 3-D Secure challenge.",
+      "data": { "reads": ["order", "payment-intent"], "writes": ["payment-result"] },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "a payment intent", "when": "the customer submits valid card details", "then": "a payment result with status 'approved' or 'declined' is recorded against the intent" },
+        { "id": "AC-2", "given": "a payment intent", "when": "the customer closes the form", "then": "a payment result with status 'abandoned' is recorded" }
+      ]
+    },
+    {
+      "id": "gw-paid",
+      "type": "exclusiveGateway",
+      "direction": "split",
+      "name": "Payment approved?",
+      "lane": "order-service"
+    },
+    {
+      "id": "end-payment-failed",
+      "type": "endEvent",
+      "name": "Payment failed",
+      "lane": "order-service",
+      "result": { "kind": "none" }
+    },
+    {
+      "id": "order-confirm",
+      "type": "serviceTask",
+      "name": "Confirm order",
+      "lane": "order-service",
+      "data": { "reads": ["order", "payment-result"], "writes": ["order"] },
+      "integration": { "system": "Order Service", "operation": "confirmOrder", "direction": "outbound" },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "an order and an approved payment result", "when": "the order is confirmed", "then": "order.status = 'confirmed'" }
+      ]
+    },
+    {
+      "id": "gw-fulfil-split",
+      "type": "parallelGateway",
+      "direction": "split",
+      "name": "Fulfilment",
+      "lane": "order-service"
+    },
+    {
+      "id": "send-receipt",
+      "type": "sendTask",
+      "name": "Send receipt",
+      "lane": "order-service",
+      "data": { "reads": ["order"], "writes": ["receipt"] },
+      "integration": { "system": "Email Service", "operation": "sendReceipt", "direction": "outbound" },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "a confirmed order", "when": "the receipt is sent", "then": "an email containing the order id and total is delivered to the customer's address" }
+      ]
+    },
+    {
+      "id": "reserve-inventory",
+      "type": "serviceTask",
+      "name": "Reserve inventory",
+      "lane": "order-service",
+      "data": { "reads": ["order"], "writes": ["inventory-reservation"] },
+      "integration": { "system": "Order Service", "operation": "reserveStock", "direction": "outbound" },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "a confirmed order", "when": "stock is reserved", "then": "a reservation exists with one line per order item and matching quantities" }
+      ]
+    },
+    {
+      "id": "gw-fulfil-join",
+      "type": "parallelGateway",
+      "direction": "join",
+      "name": "Fulfilment done",
+      "lane": "order-service",
+      "pairs_with": "gw-fulfil-split"
+    },
+    {
+      "id": "end-order-placed",
+      "type": "endEvent",
+      "name": "Order placed",
+      "lane": "order-service",
+      "result": { "kind": "none" }
+    }
+  ],
+  "edges": [
+    { "id": "e-start", "from": "start-checkout", "to": "cart-review", "data_contract": { "carries": ["cart"], "invariants": ["cart.status == 'open'"] } },
+    { "id": "e-review-validate", "from": "cart-review", "to": "checkout-validate", "data_contract": { "carries": ["cart"], "invariants": ["cart.status == 'locked'"] } },
+    { "id": "e-validate-gw", "from": "checkout-validate", "to": "gw-valid", "data_contract": { "carries": ["cart", "order"], "invariants": ["order.cart_id == cart.id"] } },
+    {
+      "id": "e-valid-yes",
+      "from": "gw-valid",
+      "to": "gw-retry-merge",
+      "name": "valid",
+      "condition": { "expression": "order.status == 'validated'", "language": "javascript" },
+      "data_contract": { "carries": ["order"], "invariants": ["order.status == 'validated'", "order.payment_attempts == 0"] }
+    },
+    {
+      "id": "e-valid-no",
+      "from": "gw-valid",
+      "to": "end-checkout-rejected",
+      "name": "rejected",
+      "is_default": true,
+      "data_contract": { "carries": ["order"], "invariants": ["order.status == 'rejected'", "order.rejection_reason is set"] }
+    },
+    { "id": "e-merge-init", "from": "gw-retry-merge", "to": "payment-init", "data_contract": { "carries": ["order"], "invariants": ["order.status == 'validated'", "order.payment_attempts < 3"] } },
+    { "id": "e-init-authorize", "from": "payment-init", "to": "payment-authorize", "data_contract": { "carries": ["order", "payment-intent"], "invariants": ["payment_intent.order_id == order.id", "payment_intent.amount == order.total"] } },
+    { "id": "e-provider-error", "from": "payment-provider-error", "to": "end-payment-error", "data_contract": { "carries": ["order"], "invariants": ["order.status == 'validated'"] } },
+    { "id": "e-authorize-gw", "from": "payment-authorize", "to": "gw-paid", "data_contract": { "carries": ["order", "payment-intent", "payment-result"], "invariants": ["payment_result.intent_id == payment_intent.id"] } },
+    {
+      "id": "e-paid-yes",
+      "from": "gw-paid",
+      "to": "order-confirm",
+      "name": "approved",
+      "condition": { "expression": "payment_result.status == 'approved'", "language": "javascript" },
+      "data_contract": { "carries": ["order", "payment-result"], "invariants": ["payment_result.status == 'approved'"] }
+    },
+    {
+      "id": "e-paid-retry",
+      "from": "gw-paid",
+      "to": "gw-retry-merge",
+      "name": "declined, retry",
+      "condition": { "expression": "payment_result.status == 'declined' && order.payment_attempts < 3", "language": "javascript" },
+      "data_contract": { "carries": ["order"], "invariants": ["order.payment_attempts < 3"] }
+    },
+    {
+      "id": "e-paid-no",
+      "from": "gw-paid",
+      "to": "end-payment-failed",
+      "name": "failed",
+      "is_default": true,
+      "data_contract": { "carries": ["order", "payment-result"], "invariants": ["payment_result.status != 'approved'"] }
+    },
+    { "id": "e-confirm-split", "from": "order-confirm", "to": "gw-fulfil-split", "data_contract": { "carries": ["order"], "invariants": ["order.status == 'confirmed'"] } },
+    { "id": "e-split-receipt", "from": "gw-fulfil-split", "to": "send-receipt", "data_contract": { "carries": ["order"] } },
+    { "id": "e-split-reserve", "from": "gw-fulfil-split", "to": "reserve-inventory", "data_contract": { "carries": ["order"] } },
+    { "id": "e-receipt-join", "from": "send-receipt", "to": "gw-fulfil-join", "data_contract": { "carries": ["order", "receipt"], "invariants": ["receipt.order_id == order.id"] } },
+    { "id": "e-reserve-join", "from": "reserve-inventory", "to": "gw-fulfil-join", "data_contract": { "carries": ["order", "inventory-reservation"], "invariants": ["inventory_reservation.order_id == order.id"] } },
+    { "id": "e-join-end", "from": "gw-fulfil-join", "to": "end-order-placed", "data_contract": { "carries": ["order", "receipt", "inventory-reservation"] } }
+  ],
+  "requirements": {
+    "non_functional": [
+      { "id": "nfr-pci", "category": "compliance", "statement": "Card data never touches our servers; only provider tokens/intents are stored.", "applies_to": ["payment-init", "payment-authorize", "payment-intent", "payment-result"], "provenance": { "status": "inferred", "source": "card payments imply PCI-DSS scope" } },
+      { "id": "nfr-validate-latency", "category": "performance", "statement": "Checkout validation completes within 500 ms at p95.", "applies_to": ["checkout-validate"], "provenance": { "status": "stated" } }
+    ],
+    "assumptions": [
+      { "id": "asm-single-currency", "statement": "A cart has a single currency; multi-currency carts are out of scope.", "affects": ["cart", "checkout-validate"], "confidence": 0.8, "confirmed": true }
+    ],
+    "open_questions": [
+      { "id": "q-retry-limit", "question": "How many payment attempts should be allowed before the checkout fails?", "affects": ["gw-paid"], "answered": true, "answer": "Three attempts." }
+    ]
+  }
+}

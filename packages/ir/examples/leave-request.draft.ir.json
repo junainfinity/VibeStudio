@@ -1,0 +1,45 @@
+{
+  "ir_version": "1.0",
+  "process": {
+    "id": "leave-approval",
+    "name": "Leave request",
+    "goal": "Let an employee request leave and get a decision from their manager.",
+    "domain": "hr",
+    "provenance": { "status": "stated", "source": "prompt: 'employees request leave, managers approve or reject, HR gets notified'" }
+  },
+  "lanes": [
+    { "id": "employee", "name": "Employee", "kind": "human", "provenance": { "status": "stated" } },
+    { "id": "manager", "name": "Manager", "kind": "human", "provenance": { "status": "stated" } },
+    { "id": "hr-system", "name": "HR System", "kind": "system", "provenance": { "status": "assumed", "source": "'HR gets notified' — assumed to be an HRIS integration rather than an email to a person" } }
+  ],
+  "data_objects": [
+    { "id": "leave-request", "name": "Leave Request", "description": "Dates, type of leave, reason." },
+    { "id": "decision", "name": "Decision", "description": "Approved/rejected plus a comment." }
+  ],
+  "nodes": [
+    { "id": "start", "type": "startEvent", "name": "Employee opens leave form", "lane": "employee", "data": { "writes": ["leave-request"] } },
+    { "id": "submit-request", "type": "userTask", "name": "Submit leave request", "lane": "employee", "data": { "reads": ["leave-request"], "writes": ["leave-request"] } },
+    { "id": "review-request", "type": "userTask", "name": "Review request", "lane": "manager", "data": { "reads": ["leave-request"], "writes": ["decision"] },
+      "acceptance_criteria": [
+        { "id": "AC-1", "given": "a submitted request", "when": "the manager approves or rejects it", "then": "a decision with a comment is recorded and the employee is notified" }
+      ]
+    },
+    { "id": "gw-decision", "type": "exclusiveGateway", "direction": "split", "name": "Approved?", "lane": "manager" },
+    { "id": "record-leave", "type": "serviceTask", "name": "Record leave in HR system", "lane": "hr-system", "data": { "reads": ["leave-request", "decision"] } },
+    { "id": "end-approved", "type": "endEvent", "name": "Leave approved", "lane": "hr-system" },
+    { "id": "end-rejected", "type": "endEvent", "name": "Leave rejected", "lane": "manager" }
+  ],
+  "edges": [
+    { "id": "e1", "from": "start", "to": "submit-request", "data_contract": { "carries": ["leave-request"] } },
+    { "id": "e2", "from": "submit-request", "to": "review-request", "data_contract": { "carries": ["leave-request"] } },
+    { "id": "e3", "from": "review-request", "to": "gw-decision", "data_contract": { "carries": ["leave-request", "decision"] } },
+    { "id": "e4", "from": "gw-decision", "to": "record-leave", "name": "approved", "condition": { "expression": "decision is approved", "language": "natural" }, "data_contract": { "carries": ["leave-request", "decision"] } },
+    { "id": "e5", "from": "gw-decision", "to": "end-rejected", "name": "rejected", "is_default": true, "data_contract": { "carries": ["decision"] } },
+    { "id": "e6", "from": "record-leave", "to": "end-approved", "data_contract": { "carries": [] } }
+  ],
+  "requirements": {
+    "open_questions": [
+      { "id": "q-balance", "question": "Should the system check the employee's remaining leave balance before the manager sees the request?", "affects": ["submit-request", "review-request"] }
+    ]
+  }
+}

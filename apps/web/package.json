@@ -1,0 +1,29 @@
+{
+  "name": "@vibestudio/web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "VibeStudio web app: edit/validate a Process IR, answer clarifying questions, render the BPMN diagram and the spec kit",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vibestudio/bpmn": "*",
+    "@vibestudio/ir": "*",
+    "@vibestudio/speckit": "*",
+    "jszip": "^3.10.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
+  }
+}

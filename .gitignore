@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.env*
+!.env.example
+
+# Unrelated work that lives in this directory — not part of VibeStudio
+Power Calculator Venture/
+sample requirement.rtf

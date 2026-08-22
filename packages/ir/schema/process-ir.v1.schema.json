@@ -1,0 +1,927 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibestudio.dev/schemas/process-ir.v1.schema.json",
+  "title": "VibeStudio Process IR v1",
+  "description": "Single intermediate representation of a business/product process. Everything downstream (BPMN 2.0 XML, spec kit, graph dev plan) is generated from this document. Structural/graph semantics that JSON Schema cannot express are enforced by the deterministic validator (@vibestudio/ir).",
+  "type": "object",
+  "required": [
+    "ir_version",
+    "process",
+    "lanes",
+    "data_objects",
+    "nodes",
+    "edges"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ir_version": {
+      "description": "IR schema version. Breaking changes bump the major.",
+      "type": "string",
+      "const": "1.0"
+    },
+    "process": {
+      "$ref": "#/$defs/Process"
+    },
+    "lanes": {
+      "description": "Actors/roles/systems that perform work. Every node is assigned to exactly one lane.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Lane"
+      }
+    },
+    "data_objects": {
+      "description": "Named data that flows along edges and is read/written by nodes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DataObject"
+      }
+    },
+    "nodes": {
+      "description": "Events, tasks and gateways. Node kind is discriminated by `type`.",
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/Node"
+      }
+    },
+    "edges": {
+      "description": "Sequence flows. Every edge carries a data contract.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Edge"
+      }
+    },
+    "requirements": {
+      "$ref": "#/$defs/Requirements"
+    },
+    "extensions": {
+      "$ref": "#/$defs/Extensions"
+    }
+  },
+  "$defs": {
+    "Id": {
+      "description": "kebab-case identifier, unique across the whole document (process, lanes, data objects, nodes, edges, requirements share one namespace).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "IdList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Id"
+      },
+      "uniqueItems": true
+    },
+    "Name": {
+      "description": "Short human-readable label (rendered on the diagram / used as spec headings).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "Description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "Extensions": {
+      "description": "Free-form vendor/tool extensions. Keys must be prefixed with `x-`. Ignored by the validator and generators.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^x-[a-z0-9-]+$"
+      }
+    },
+    "Provenance": {
+      "description": "Where this element came from. `stated` = explicitly in the user's prompt/answers; `inferred` = strongly implied; `assumed` = a guess the user should confirm (the clarifying loop turns these into questions).",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "stated",
+            "inferred",
+            "assumed"
+          ]
+        },
+        "source": {
+          "description": "Short quote or reference (e.g. prompt excerpt, answer id) supporting this element.",
+          "type": "string",
+          "maxLength": 500
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "Process": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "goal": {
+          "description": "One-sentence outcome the process exists to achieve. Feeds constitution.md.",
+          "type": "string",
+          "maxLength": 500
+        },
+        "domain": {
+          "description": "Business domain tag, e.g. 'e-commerce', 'hr-onboarding'.",
+          "type": "string",
+          "maxLength": 80
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      }
+    },
+    "Lane": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "kind": {
+          "description": "`human` = a person/role performing user or manual tasks; `system` = software we build/own; `external` = a third-party system or organisation.",
+          "type": "string",
+          "enum": [
+            "human",
+            "system",
+            "external"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      }
+    },
+    "DataObject": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "schema": {
+          "description": "JSON Schema (draft 2020-12) object describing the data's shape. Validated and compiled by the validator (rule data.schema-invalid). Strongly recommended: edge contracts and spec-kit contracts are derived from it.",
+          "type": "object"
+        },
+        "states": {
+          "description": "Optional lifecycle states the object can be in (e.g. draft, validated, paid). Referenced by invariants/conditions.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "uniqueItems": true
+        },
+        "sensitivity": {
+          "description": "Data classification hint used by NFR/compliance checks and contract generation.",
+          "type": "string",
+          "enum": [
+            "public",
+            "internal",
+            "confidential",
+            "pii",
+            "payment"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      }
+    },
+    "DataRefs": {
+      "description": "Data objects a node reads (must arrive on incoming edges) and writes (created or mutated by the node).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reads": {
+          "$ref": "#/$defs/IdList"
+        },
+        "writes": {
+          "$ref": "#/$defs/IdList"
+        }
+      }
+    },
+    "DataWrites": {
+      "description": "Data produced by an event (its payload). Events cannot read.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "writes": {
+          "$ref": "#/$defs/IdList"
+        }
+      }
+    },
+    "AcceptanceCriterion": {
+      "description": "Given/When/Then criterion. `id` is unique within the node; the fully-qualified id is `<node-id>/<id>`.",
+      "type": "object",
+      "required": [
+        "id",
+        "given",
+        "when",
+        "then"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^AC-[1-9][0-9]*$"
+        },
+        "given": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "when": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "then": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "AcceptanceCriteria": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AcceptanceCriterion"
+      }
+    },
+    "Integration": {
+      "description": "External/internal system interaction performed by a service/send/receive task.",
+      "type": "object",
+      "required": [
+        "system"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "system": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Optional: the external/system lane that represents this system, so plans can correlate integrations with actors."
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "outbound",
+            "inbound",
+            "both"
+          ]
+        },
+        "protocol": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        }
+      }
+    },
+    "Condition": {
+      "description": "Branch condition on an edge leaving an exclusive/inclusive split. `expression` is authoritative; `language` says how to read it (`natural` = plain language, to be formalised later).",
+      "type": "object",
+      "required": [
+        "expression"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "natural",
+            "cel",
+            "javascript"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        }
+      }
+    },
+    "DataContract": {
+      "description": "What flows along an edge. `carries` lists data objects that are guaranteed present at the target; `invariants` are predicates that hold for them at that point.",
+      "type": "object",
+      "required": [
+        "carries"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "carries": {
+          "$ref": "#/$defs/IdList"
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        }
+      }
+    },
+    "TriggerKind": {
+      "type": "string",
+      "enum": [
+        "none",
+        "message",
+        "timer",
+        "error",
+        "signal"
+      ]
+    },
+    "EventDefinition": {
+      "description": "What starts/fires the event.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/TriggerKind"
+        },
+        "detail": {
+          "description": "Message name, timer expression (ISO 8601 duration/cycle), error code, or signal name.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        }
+      }
+    },
+    "EndResult": {
+      "description": "How the process ends at this end event.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "`none` = normal completion of this path; `terminate` = stops the entire process instance (all parallel branches); `error` = ends with an error; `message` = ends by sending a message.",
+          "type": "string",
+          "enum": [
+            "none",
+            "terminate",
+            "error",
+            "message"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        }
+      }
+    },
+    "StartEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "lane"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "type": {
+          "const": "startEvent"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Lane (actor) responsible for this node."
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventDefinition",
+          "description": "Defaults to {kind:'none'} when omitted. Allowed kinds: none, message, timer, signal."
+        },
+        "data": {
+          "$ref": "#/$defs/DataWrites"
+        }
+      },
+      "description": "Where a process instance begins. In-degree 0, out-degree 1."
+    },
+    "EndEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "lane"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "type": {
+          "const": "endEvent"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Lane (actor) responsible for this node."
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        },
+        "result": {
+          "$ref": "#/$defs/EndResult",
+          "description": "Defaults to {kind:'none'} when omitted."
+        }
+      },
+      "description": "Where a path (or the whole process, if terminate) ends. In-degree 1, out-degree 0."
+    },
+    "IntermediateCatchEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "lane",
+        "trigger"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "type": {
+          "const": "intermediateCatchEvent"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Lane (actor) responsible for this node."
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventDefinition",
+          "description": "Allowed kinds: message, timer, signal."
+        },
+        "data": {
+          "$ref": "#/$defs/DataRefs"
+        }
+      },
+      "description": "Waits for a message/timer/signal in the middle of a flow. In-degree 1, out-degree 1."
+    },
+    "BoundaryEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "lane",
+        "attached_to",
+        "trigger"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "type": {
+          "const": "boundaryEvent"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Lane (actor) responsible for this node."
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        },
+        "attached_to": {
+          "$ref": "#/$defs/Id",
+          "description": "Id of the host task this event is attached to."
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventDefinition",
+          "description": "Allowed kinds: error, timer, message, signal."
+        },
+        "interrupting": {
+          "description": "true (default) = firing cancels the host task; false = host continues in parallel.",
+          "type": "boolean"
+        },
+        "data": {
+          "$ref": "#/$defs/DataWrites"
+        }
+      },
+      "description": "Attached to a task; fires on error/timer/message while the task is active. In-degree 0, out-degree 1."
+    },
+    "Task": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "lane"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "userTask",
+            "serviceTask",
+            "scriptTask",
+            "sendTask",
+            "receiveTask",
+            "manualTask",
+            "businessRuleTask"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Lane (actor) responsible for this node."
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        },
+        "data": {
+          "$ref": "#/$defs/DataRefs"
+        },
+        "acceptance_criteria": {
+          "$ref": "#/$defs/AcceptanceCriteria",
+          "description": "Required (>=1) for a final IR; the validator turns a missing list into a clarifying question in draft mode."
+        },
+        "integration": {
+          "$ref": "#/$defs/Integration"
+        }
+      },
+      "description": "A unit of work performed by the lane's actor. In-degree 1, out-degree 1 (use gateways for merges/branches). Each task becomes one unit in the graph dev plan."
+    },
+    "Gateway": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "name",
+        "lane",
+        "direction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "exclusiveGateway",
+            "parallelGateway",
+            "inclusiveGateway"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "lane": {
+          "$ref": "#/$defs/Id",
+          "description": "Lane (actor) responsible for this node."
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        },
+        "direction": {
+          "description": "A gateway is either a split (1 in, >=2 out) or a join (>=2 in, 1 out) \u2014 never both.",
+          "type": "string",
+          "enum": [
+            "split",
+            "join"
+          ]
+        },
+        "pairs_with": {
+          "$ref": "#/$defs/Id",
+          "description": "On a join: id of the split gateway (same type) it closes. Required for parallel/inclusive joins; optional for exclusive joins (plain merges, e.g. loop re-entry)."
+        }
+      },
+      "description": "Routing node. exclusive = XOR (one path), parallel = AND (all paths), inclusive = OR (one or more paths)."
+    },
+    "Node": {
+      "description": "A node is one of the variants below, discriminated by `type`.",
+      "type": "object",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/StartEvent"
+        },
+        {
+          "$ref": "#/$defs/EndEvent"
+        },
+        {
+          "$ref": "#/$defs/IntermediateCatchEvent"
+        },
+        {
+          "$ref": "#/$defs/BoundaryEvent"
+        },
+        {
+          "$ref": "#/$defs/Task"
+        },
+        {
+          "$ref": "#/$defs/Gateway"
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "Edge": {
+      "type": "object",
+      "required": [
+        "id",
+        "from",
+        "to",
+        "data_contract"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "from": {
+          "$ref": "#/$defs/Id"
+        },
+        "to": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "description": "Optional label shown on the flow (e.g. 'approved').",
+          "$ref": "#/$defs/Name"
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition",
+          "description": "Only allowed on edges leaving an exclusive/inclusive split."
+        },
+        "is_default": {
+          "description": "Marks the default flow of an exclusive/inclusive split (taken when no condition matches). At most one per split.",
+          "type": "boolean"
+        },
+        "data_contract": {
+          "$ref": "#/$defs/DataContract"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "extensions": {
+          "$ref": "#/$defs/Extensions"
+        }
+      }
+    },
+    "NonFunctionalRequirement": {
+      "type": "object",
+      "required": [
+        "id",
+        "category",
+        "statement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "performance",
+            "security",
+            "compliance",
+            "reliability",
+            "scalability",
+            "usability",
+            "observability",
+            "cost",
+            "other"
+          ]
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "applies_to": {
+          "$ref": "#/$defs/IdList",
+          "description": "Nodes, lanes or data objects this applies to. Empty/omitted = the whole process."
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      }
+    },
+    "Assumption": {
+      "type": "object",
+      "required": [
+        "id",
+        "statement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "affects": {
+          "$ref": "#/$defs/IdList"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "confirmed": {
+          "description": "true once the user has confirmed the assumption (the clarifying loop asks about unconfirmed ones).",
+          "type": "boolean"
+        }
+      }
+    },
+    "OpenQuestion": {
+      "type": "object",
+      "required": [
+        "id",
+        "question"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "affects": {
+          "$ref": "#/$defs/IdList"
+        },
+        "answered": {
+          "type": "boolean"
+        },
+        "answer": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "Requirements": {
+      "description": "Cross-cutting requirements captured during intake/clarification.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "non_functional": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonFunctionalRequirement"
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Assumption"
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OpenQuestion"
+          }
+        }
+      }
+    }
+  }
+}
